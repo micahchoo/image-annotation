@@ -1,4 +1,4 @@
-# 0.1.0
+# 0.1.1
 
 Mark part of an image, add a caption, and attach it to a note.
 
@@ -10,3 +10,5 @@ Mark part of an image, add a caption, and attach it to a note.
 
 The plugin, installation folder, and release archive use the name Image Annotation.
 Requires Obsidian 1.8.7 or later.
+
+Includes the corrected lockfile for clean installations and release builds.

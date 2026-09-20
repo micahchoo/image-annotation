@@ -1,6 +1,6 @@
 {
   "name": "image-annotation",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Mark image regions, add captions, and attach them to notes.",
   "scripts": {

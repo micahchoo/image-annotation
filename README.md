@@ -2,12 +2,12 @@
 
 Mark part of an image, add a caption, and attach it to a note.
 
-![An image region attached to the real note His Eyes Sparkle](https://raw.githubusercontent.com/micahchoo/image-annotation/0.1.0/docs/image-annotation.png)
+![An image region attached to the real note His Eyes Sparkle](https://raw.githubusercontent.com/micahchoo/image-annotation/0.1.1/docs/image-annotation.png)
 
 Keep a detail from an image beside the words you write about it.
 Return to the full image or its source note from the preview.
 
-![Right-click an image, draw a region, add a title, save, attach to His Eyes Sparkle, and preview the caption](https://raw.githubusercontent.com/micahchoo/image-annotation/0.1.0/docs/right-click-workflow.gif)
+![Right-click an image, draw a region, add a title, save, attach to His Eyes Sparkle, and preview the caption](https://raw.githubusercontent.com/micahchoo/image-annotation/0.1.1/docs/right-click-workflow.gif)
 
 The recording uses the earlier button labels; the steps are the same.
 
