@@ -1,0 +1,25 @@
+{
+  "name": "image-annotation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mark image regions, add captions, and attach them to notes.",
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "check": "tsc --noEmit",
+    "test": "vitest run tests && node --test scripts/release.test.mjs",
+    "lint": "eslint src --max-warnings 0",
+    "release:check": "node scripts/check-release.mjs",
+    "release:package": "node scripts/package-release.mjs",
+    "release:verify": "npm run lint && npm run check && npm test && npm run build && npm run release:package"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.39.5",
+    "eslint-plugin-obsidianmd": "^0.4.2",
+    "obsidian": "^1.8.7",
+    "typescript": "^5.7.0",
+    "vitest": "4.1.11"
+  },
+  "license": "MIT"
+}
