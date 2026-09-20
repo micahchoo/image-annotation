@@ -106,3 +106,14 @@ from the vault, and its original three regions and two attachments remain.
 
 No Android device was connected for a real-device check. Mobile touch behavior remains
 unverified; this update makes no new mobile compatibility claim. Publication is verified separately through the release workflow.
+
+
+## 0.1.4 correctness and larger-workload checks
+
+Checked on 2026-09-20: official lint, TypeScript, 94 behavior tests and release checks pass. Clean Node 22/npm 10 dependency installation and vulnerability audit pass. Source/cleanup tests cover unsupported block context, late reference events, encoded reference definitions, missing dependency restoration, stable region order and atomic index replacement.
+
+Synthetic tests use fake in-memory vaults. At 250k regions plus 250k connections, warm edits invalidate one connection and yield between serialization batches. Cold native JSON parsing alone takes about 258ms; full-file writes still grow with the index. Repeated edits and renames retain about657–660MB after forced GC at this extreme size.
+
+Cleanup of100k notes and10k snapshots reads each unchanged note once: approximately641ms total and34ms maximum timer gap, protecting the5k referenced snapshots. Portable probes: `node --expose-gc scripts/benchmark-store.mjs 250000` and `node scripts/benchmark-cleanup.mjs`. Full before/after evidence is in `ledgers/ROUND2-IA.md`.
+
+These automated results are not a desktop, mobile, sync or filesystem latency sign-off.

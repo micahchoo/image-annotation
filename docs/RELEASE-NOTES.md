@@ -1,12 +1,9 @@
-# 0.1.3
+# 0.1.4
 
-- Refresh only affected previews. Caption edits no longer reload the annotation index, and unchanged index reloads do not redraw previews.
-- Choose which duplicate reference to change using a line picker in Live Preview.
-- Optionally remove previews when deleting a region, while keeping captions and surrounding writing.
-- Review and remove unavailable references with a new command.
-- Review unused image snapshots and move them to trash. Cleanup protects referenced images, including caption links and unsaved Markdown editor text, and rechecks before removal.
-- Reject oversized remote images early when the server supplies a size. The downloaded-byte check remains in place when it does not.
+- Refuse unsupported Markdown blocks before attaching an image region to prose. Preserve valid paragraphs after display math.
+- Refresh previews when missing captions, images or the annotation index return.
+- Scan notes once during media cleanup, then recheck changed documents and open editors. Protect encoded image references and references added during cleanup.
+- Use targeted connection and image indexes. Preserve overlapping-region order after edits and attachment order after renames.
+- Yield during large index validation, serialization and folder renames. Keep atomic external-edit conflict checks and the existing storage format.
 
-Lint, TypeScript, 52 behavior tests, build, and packaging checks passed. Full desktop workflow verification was interrupted by an unresponsive Obsidian CLI. Mobile touch behavior remains untested.
-
-Requires Obsidian 1.8.7 or later.
+The index still uses a single JSON file. Very large indexes retain synchronous parsing and full-file write costs. Synthetic scaling checks do not establish mobile or device-specific performance.
