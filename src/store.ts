@@ -8,11 +8,18 @@ const INDEX = `${ROOT}/index.json`;
 const CAPTIONS = `${ROOT}/Captions`;
 const BODY_START = '<!-- image-annotation:body -->';
 const BODY_END = '<!-- image-annotation:end -->';
+type Delta = { regions?: Region[]; connections?: Connection[]; removedRegions?: string[]; removedConnections?: string[] };
+
 
 export class RegionStore {
   private data: RegionData = { version: 1, regions: [], connections: [] };
   private regionsById = new Map<string, Region>();
   private connectionsById = new Map<string, Connection>();
+  private connectionsByRegion = new Map<string, Set<string>>();
+  private connectionsByPath = new Map<string, Set<string>>();
+  private imagePathsSnapshot?: readonly string[];
+  private regionImages = new Map<string, Set<string>>();
+  private serializedRecords = new WeakMap<object, string>();
   private pendingChanges = new Set<string>();
   private loaded = false;
   private diskIndex: string | null = null;
@@ -24,7 +31,7 @@ export class RegionStore {
   async load(): Promise<void> {
     await this.enqueue(async () => {
       const current = await this.readDisk();
-      this.adopt(current.data);
+      await this.adopt(current.data);
       this.diskIndex = current.raw;
       this.loaded = true;
     });
@@ -45,7 +52,7 @@ export class RegionStore {
   }
 
   getConnections(regionId: string): Connection[] {
-    return this.data.connections.filter(item => item.regionId === regionId).map(copy);
+    return [...(this.connectionsByRegion.get(regionId) ?? [])].map(id => copy(this.connectionsById.get(id)!));
   }
 
   async createRegion(source: MediaSource, geometry: Geometry, title: string): Promise<Region> {
@@ -58,14 +65,14 @@ export class RegionStore {
         geometry: normalizedGeometry, created: new Date().toISOString(),
       };
       const next = { ...this.data, regions: [...this.data.regions, region] };
-      await this.commit(next, this.diskIndex);
+      await this.commit(next, this.diskIndex, { regions: [region] });
       return copy(region);
     });
   }
 
   async updateRegion(id: string, geometry: Geometry, title: string): Promise<Region> {
     return this.mutate(async () => {
-      const existing = this.data.regions.find(region => region.id === id);
+      const existing = this.regionsById.get(id);
       if (!existing) throw new Error(`Cannot update unknown region: ${id}`);
       const updated: Region = {
         ...existing,
@@ -73,26 +80,26 @@ export class RegionStore {
         geometry: validateGeometry(geometry),
       };
       const next = { ...this.data, regions: this.data.regions.map(region => region.id === id ? updated : region) };
-      await this.commit(next, this.diskIndex);
+      await this.commit(next, this.diskIndex, { regions: [updated] });
       return copy(updated);
     });
   }
 
   async removeRegion(id: string): Promise<void> {
     return this.mutate(async () => {
-      if (!this.data.regions.some(region => region.id === id)) throw new Error(`Cannot remove unknown region: ${id}`);
+      if (!this.regionsById.has(id)) throw new Error(`Cannot remove unknown region: ${id}`);
       const next = {
         ...this.data,
         regions: this.data.regions.filter(region => region.id !== id),
         connections: this.data.connections.filter(connection => connection.regionId !== id),
       };
-      await this.commit(next, this.diskIndex);
+      await this.commit(next, this.diskIndex, { removedRegions: [id], removedConnections: [...(this.connectionsByRegion.get(id) ?? [])] });
     });
   }
 
   async connect(regionId: string, target: PassageTarget, caption: string): Promise<Connection> {
     return this.mutate(async () => {
-      if (!this.data.regions.some(region => region.id === regionId)) {
+      if (!this.regionsById.has(regionId)) {
         throw new Error(`Cannot connect unknown region: ${regionId}`);
       }
       const normalizedTarget = validateTarget(target);
@@ -109,7 +116,7 @@ export class RegionStore {
         await this.ensureFolder(CAPTIONS);
         await this.app.vault.create(connection.captionPath, captionText);
         createdCaption = true;
-        await this.commit({ ...this.data, connections: [...this.data.connections, connection] }, this.diskIndex);
+        await this.commit({ ...this.data, connections: [...this.data.connections, connection] }, this.diskIndex, { connections: [connection] });
       } catch (error) {
         if (createdCaption) {
           const file = this.app.vault.getAbstractFileByPath(connection.captionPath);
@@ -133,22 +140,23 @@ export class RegionStore {
       const oldName = validatePath(oldPath, 'old path');
       const newName = validatePath(newPath, 'new path');
       if (oldName === newName) return;
-      let changed = false;
       const replace = (path: string) => path === oldName || path.startsWith(`${oldName}/`)
-        ? (changed = true, `${newName}${path.slice(oldName.length)}`) : path;
-      const regions = this.data.regions.map(region => ({
-        ...region,
-        source: {
-          ...region.source,
-          path: replace(region.source.path),
-          ...(region.source.articlePath ? { articlePath: replace(region.source.articlePath) } : {}),
-        },
-      }));
-      const connections = this.data.connections.map(connection => ({
-        ...connection, notePath: replace(connection.notePath), captionPath: replace(connection.captionPath),
-      }));
-      if (!changed) return;
-      await this.commit({ ...this.data, regions, connections }, this.diskIndex);
+        ? `${newName}${path.slice(oldName.length)}` : path;
+      const changedRegions: Region[] = [], changedConnections: Connection[] = [];
+      const regions = await mapBatched(this.data.regions, region => {
+        const path = replace(region.source.path), articlePath = region.source.articlePath ? replace(region.source.articlePath) : undefined;
+        if (path === region.source.path && articlePath === region.source.articlePath) return region;
+        const updated = { ...region, source: { ...region.source, path, ...(articlePath ? { articlePath } : {}) } };
+        changedRegions.push(updated); return updated;
+      });
+      const connections = await mapBatched(this.data.connections, connection => {
+        const notePath = replace(connection.notePath), captionPath = replace(connection.captionPath);
+        if (notePath === connection.notePath && captionPath === connection.captionPath) return connection;
+        const updated = { ...connection, notePath, captionPath };
+        changedConnections.push(updated); return updated;
+      });
+      if (!changedRegions.length && !changedConnections.length) return;
+      await this.commit({ ...this.data, regions, connections }, this.diskIndex, { regions: changedRegions, connections: changedConnections });
     });
   }
 
@@ -156,7 +164,7 @@ export class RegionStore {
     return this.enqueue(async () => {
       if (!this.loaded) throw new Error('RegionStore.load() must be awaited before mutation');
       const current = await this.readDisk();
-      this.adopt(current.data);
+      await this.adopt(current.data);
       this.diskIndex = current.raw;
       return fn();
     });
@@ -168,8 +176,8 @@ export class RegionStore {
     return result;
   }
 
-  private async commit(next: RegionData, expected: string | null): Promise<void> {
-    const serialized = JSON.stringify(next, null, 2) + '\n';
+  private async commit(next: RegionData, expected: string | null, delta: Delta): Promise<void> {
+    const serialized = await this.serialize(next);
     await this.ensureFolder(ROOT);
     const file = this.app.vault.getAbstractFileByPath(INDEX);
     if (file && isFile(file) && file.extension === 'json') {
@@ -183,7 +191,17 @@ export class RegionStore {
       if (expected !== null) throw new Error('Image Annotation/index.json disappeared; reload and retry');
       await this.app.vault.create(INDEX, serialized);
     }
-    this.adopt(next);
+    let affectedCount = (delta.connections?.length ?? 0) + (delta.removedConnections?.length ?? 0);
+    for (const region of delta.regions ?? []) {
+      if (affectedCount > 256) break;
+      affectedCount += (this.connectionsByRegion.get(region.id)?.size ?? 0) + 1;
+    }
+    for (const id of delta.removedRegions ?? []) {
+      if (affectedCount > 256) break;
+      affectedCount += (this.connectionsByRegion.get(id)?.size ?? 0) + 1;
+    }
+    if (affectedCount > 256) await this.adopt(next);
+    else this.applyDelta(next, delta);
     this.diskIndex = serialized;
   }
 
@@ -195,26 +213,151 @@ export class RegionStore {
   }
 
   connectionsForPath(path: string): Set<string> {
-    const matches = (value: string) => value === path || value.startsWith(`${path}/`);
-    const regions = new Set(this.data.regions.filter(region => matches(region.source.path) || (region.source.articlePath && matches(region.source.articlePath))).map(region => region.id));
-    return new Set(this.data.connections.filter(connection => regions.has(connection.regionId) || matches(connection.captionPath) || matches(connection.notePath)).map(connection => connection.id));
+    return new Set(this.connectionsByPath.get(path) ?? []);
   }
 
-  private adopt(next: RegionData): void {
-    if (next === this.data) return;
-    const regions = new Map(next.regions.map(region => [region.id, region]));
-    const connections = new Map(next.connections.map(connection => [connection.id, connection]));
-    const changedRegions = new Set<string>();
-    for (const id of new Set([...this.regionsById.keys(), ...regions.keys()])) {
-      if (JSON.stringify(this.regionsById.get(id)) !== JSON.stringify(regions.get(id))) changedRegions.add(id);
+  /** Immutable source-path snapshot; cleanup can reuse it until regions change. */
+  imagePaths(): readonly string[] {
+    return this.imagePathsSnapshot ??= Object.freeze([...this.regionImages.keys()]);
+  }
+
+  regionsForImage(path: string): Region[] {
+    return [...(this.regionImages.get(path) ?? [])].map(id => copy(this.regionsById.get(id)!));
+  }
+
+  private record(value: Region | Connection): string {
+    let serialized = this.serializedRecords.get(value);
+    if (serialized === undefined) { serialized = JSON.stringify(value); this.serializedRecords.set(value, serialized); }
+    return serialized;
+  }
+
+  /** Cache unchanged records; yield during large cold serializations. Schema stays v1. */
+  private async serialize(data: RegionData): Promise<string> {
+    let start = performance.now();
+    const serializeList = async (records: Array<Region | Connection>) => {
+      const lines: string[] = [];
+      for (let i = 0; i < records.length; i++) {
+        lines.push(`    ${this.record(records[i])}`);
+        if (i % 256 === 0 && performance.now() - start >= 8) { await new Promise<void>(resolve => window.setTimeout(resolve, 0)); start = performance.now(); }
+      }
+      return lines.length ? `[\n${lines.join(',\n')}\n  ]` : '[]';
+    };
+    const regions = await serializeList(data.regions), connections = await serializeList(data.connections);
+    return `{\n  "version": 1,\n  "regions": ${regions},\n  "connections": ${connections}\n}\n`;
+  }
+
+  private connectionPaths(connection: Connection): Set<string> {
+    const source = this.regionsById.get(connection.regionId)?.source;
+    const paths = [connection.notePath, connection.captionPath, source?.path, source?.articlePath];
+    const result = new Set<string>();
+    for (const path of paths) {
+      if (!path) continue;
+      const parts = path.split('/');
+      for (let length = 1; length <= parts.length; length++) result.add(parts.slice(0, length).join('/'));
     }
-    for (const id of new Set([...this.connectionsById.keys(), ...connections.keys()])) {
-      const before = this.connectionsById.get(id), after = connections.get(id);
-      if (JSON.stringify(before) !== JSON.stringify(after) || (before && changedRegions.has(before.regionId)) || (after && changedRegions.has(after.regionId))) this.pendingChanges.add(id);
+    return result;
+  }
+
+  private applyDelta(next: RegionData, delta: Delta): void {
+    if (delta.regions?.length || delta.removedRegions?.length) this.imagePathsSnapshot = undefined;
+    const updatedConnections = new Map((delta.connections ?? []).map(connection => [connection.id, connection]));
+    const removedConnections = new Set(delta.removedConnections ?? []);
+    const affected = new Set([...(delta.removedConnections ?? []), ...(delta.connections ?? []).map(connection => connection.id)]);
+    for (const id of [...(delta.removedRegions ?? []), ...(delta.regions ?? []).map(region => region.id)]) {
+      for (const connectionId of this.connectionsByRegion.get(id) ?? []) affected.add(connectionId);
+    }
+    for (const id of affected) {
+      const before = this.connectionsById.get(id);
+      if (before) {
+        for (const path of this.connectionPaths(before)) removeFrom(this.connectionsByPath, path, id);
+        const after = updatedConnections.get(id) ?? before;
+        if (removedConnections.has(id) || after.regionId !== before.regionId) {
+          removeFrom(this.connectionsByRegion, before.regionId, id);
+        }
+      }
+    }
+    for (const id of delta.removedRegions ?? []) {
+      const before = this.regionsById.get(id);
+      if (before) removeFrom(this.regionImages, before.source.path, id);
+      this.regionsById.delete(id);
+    }
+    for (const region of delta.regions ?? []) {
+      const before = this.regionsById.get(region.id);
+      if (before && before.source.path !== region.source.path) removeFrom(this.regionImages, before.source.path, region.id);
+      this.regionsById.set(region.id, region);
+      addTo(this.regionImages, region.source.path, region.id);
+    }
+    for (const id of delta.removedConnections ?? []) this.connectionsById.delete(id);
+    for (const connection of delta.connections ?? []) this.connectionsById.set(connection.id, connection);
+    for (const id of affected) {
+      const connection = this.connectionsById.get(id);
+      if (connection) {
+        addTo(this.connectionsByRegion, connection.regionId, id);
+        for (const path of this.connectionPaths(connection)) addTo(this.connectionsByPath, path, id);
+      }
+      this.pendingChanges.add(id);
     }
     this.data = next;
-    this.regionsById = regions;
-    this.connectionsById = connections;
+  }
+
+  /** Full comparison is reserved for externally replaced indexes, never a local edit. */
+  private async adopt(next: RegionData): Promise<void> {
+    if (next === this.data) return;
+    const regions = new Map<string, Region>();
+    const connections = new Map<string, Connection>();
+    await eachBatched(next.regions, region => { regions.set(region.id, region); });
+    await eachBatched(next.connections, connection => { connections.set(connection.id, connection); });
+    const delta: Delta = { regions: [], connections: [], removedRegions: [], removedConnections: [] };
+    let start = performance.now(), count = 0;
+    const yieldIfNeeded = async () => {
+      if (++count % 256 === 0 && performance.now() - start >= 8) { await new Promise<void>(resolve => window.setTimeout(resolve, 0)); start = performance.now(); }
+    };
+    for (const [id, region] of regions) {
+      const before = this.regionsById.get(id);
+      if (!before || this.record(before) !== this.record(region)) delta.regions!.push(region);
+      await yieldIfNeeded();
+    }
+    for (const id of this.regionsById.keys()) { if (!regions.has(id)) delta.removedRegions!.push(id); await yieldIfNeeded(); }
+    for (const [id, connection] of connections) {
+      const before = this.connectionsById.get(id);
+      if (!before || this.record(before) !== this.record(connection)) delta.connections!.push(connection);
+      await yieldIfNeeded();
+    }
+    for (const id of this.connectionsById.keys()) { if (!connections.has(id)) delta.removedConnections!.push(id); await yieldIfNeeded(); }
+    const changedRegions = new Set<Region>(), changedConnections = new Set<Connection>();
+    await eachBatched(delta.regions ?? [], region => { changedRegions.add(region); });
+    await eachBatched(delta.connections ?? [], connection => { changedConnections.add(connection); });
+    // Retain immutable cached record identities after whitespace-only external edits.
+    next = { version: 1, regions: await mapBatched(next.regions, region => this.regionsById.get(region.id) && !changedRegions.has(region) ? this.regionsById.get(region.id)! : region), connections: await mapBatched(next.connections, connection => this.connectionsById.get(connection.id) && !changedConnections.has(connection) ? this.connectionsById.get(connection.id)! : connection) };
+    const changedIds = new Set<string>(), changedRegionIds = new Set<string>();
+    await eachBatched(delta.removedConnections ?? [], id => { changedIds.add(id); });
+    await eachBatched(delta.connections ?? [], connection => { changedIds.add(connection.id); });
+    await eachBatched(delta.removedRegions ?? [], id => { changedRegionIds.add(id); });
+    await eachBatched(delta.regions ?? [], region => { changedRegionIds.add(region.id); });
+    for (const id of changedRegionIds) {
+      for (const connectionId of this.connectionsByRegion.get(id) ?? []) { changedIds.add(connectionId); await yieldIfNeeded(); }
+      await yieldIfNeeded();
+    }
+    // Build off to the side: readers see a complete previous snapshot until publication.
+    const staging = new RegionStore(this.app);
+    for (let offset = 0; offset < next.regions.length; offset += 128) {
+      staging.applyDelta(next, { regions: next.regions.slice(offset, offset + 128) });
+      if (performance.now() - start >= 8) { await new Promise<void>(resolve => window.setTimeout(resolve, 0)); start = performance.now(); }
+    }
+    for (let offset = 0; offset < next.connections.length; offset += 128) {
+      const batch = next.connections.slice(offset, offset + 128);
+      staging.applyDelta(next, { connections: batch });
+      for (const connection of batch) if (changedRegionIds.has(connection.regionId)) changedIds.add(connection.id);
+      if (performance.now() - start >= 8) { await new Promise<void>(resolve => window.setTimeout(resolve, 0)); start = performance.now(); }
+    }
+    this.data = next;
+    this.regionsById = staging.regionsById;
+    this.connectionsById = staging.connectionsById;
+    this.connectionsByRegion = staging.connectionsByRegion;
+    this.connectionsByPath = staging.connectionsByPath;
+    this.regionImages = staging.regionImages;
+    if (delta.regions?.length || delta.removedRegions?.length) this.imagePathsSnapshot = undefined;
+    for (const id of changedIds) this.pendingChanges.add(id);
   }
 
   private async readDisk(): Promise<{ data: RegionData; raw: string | null }> {
@@ -225,7 +368,7 @@ export class RegionStore {
     if (this.loaded && raw === this.diskIndex) return { data: this.data, raw };
     let value: unknown;
     try { value = JSON.parse(raw); } catch { throw new Error('Image Annotation/index.json is corrupt JSON'); }
-    return { data: validateData(value), raw };
+    return { data: await validateData(value), raw };
   }
 
   private async ensureFolder(path: string): Promise<void> {
@@ -241,6 +384,13 @@ export class RegionStore {
     this.sequence += 1;
     return `${prefix}-${Date.now().toString(36)}-${this.sequence.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   }
+}
+
+function addTo(index: Map<string, Set<string>>, key: string, id: string): void {
+  let ids = index.get(key); if (!ids) { ids = new Set(); index.set(key, ids); } ids.add(id);
+}
+function removeFrom(index: Map<string, Set<string>>, key: string, id: string): void {
+  const ids = index.get(key); if (ids?.delete(id) && !ids.size) index.delete(key);
 }
 
 function copy<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
@@ -322,22 +472,43 @@ function extractCaption(text: string): string {
   return body.replace(/^\r?\n/, '').replace(/\r?\n$/, '');
 }
 
-function validateData(value: unknown): RegionData {
+async function validateData(value: unknown): Promise<RegionData> {
   if (!value || typeof value !== 'object' || (value as { version?: unknown }).version !== 1) throw new Error('Unsupported or corrupt Image Annotation index version');
   const candidate = value as { regions?: unknown; connections?: unknown };
   if (!Array.isArray(candidate.regions) || !Array.isArray(candidate.connections)) throw new Error('Corrupt Image Annotation index');
-  const regions = candidate.regions.map(item => {
+  const ids = new Set<string>();
+  const regions = await mapBatched(candidate.regions, item => {
     const region = item as Region;
     if (!region || typeof region.id !== 'string' || !region.id || typeof region.created !== 'string') throw new Error('Corrupt region record');
+    if (ids.has(region.id)) throw new Error('Duplicate Image Annotation record id');
+    ids.add(region.id);
     return { id: region.id, title: validateTitle(region.title), source: validateSource(region.source), geometry: validateGeometry(region.geometry), created: region.created };
   });
-  const ids = new Set(regions.map(region => region.id));
-  const connections = candidate.connections.map(item => {
+  const connectionIds = new Set<string>();
+  const connections = await mapBatched(candidate.connections, item => {
     const connection = item as Connection;
     if (!connection || typeof connection.id !== 'string' || !connection.id || !ids.has(connection.regionId) || typeof connection.created !== 'string') throw new Error('Corrupt connection record');
+    if (ids.has(connection.id) || connectionIds.has(connection.id)) throw new Error('Duplicate Image Annotation record id');
+    connectionIds.add(connection.id);
     const target = validateTarget(connection);
     return { id: connection.id, regionId: connection.regionId, notePath: target.notePath, ...(target.blockId ? { blockId: target.blockId } : {}), captionPath: validatePath(connection.captionPath, 'caption path'), created: connection.created };
   });
-  if (new Set([...regions.map(item => item.id), ...connections.map(item => item.id)]).size !== regions.length + connections.length) throw new Error('Duplicate Image Annotation record id');
   return { version: 1, regions, connections };
+}
+
+/** Preserve collection order while splitting large validation/mapping tasks. */
+async function eachBatched<T>(items: readonly T[], action: (item: T) => void): Promise<void> {
+ let started = performance.now();
+ for (let index = 0; index < items.length; index++) {
+  action(items[index]);
+  if (index % 256 === 255 && performance.now() - started >= 8) {
+   await new Promise<void>(resolve => window.setTimeout(resolve, 0));
+   started = performance.now();
+  }
+ }
+}
+async function mapBatched<T, U>(items: readonly T[], action: (item: T) => U): Promise<U[]> {
+ const result: U[] = [];
+ await eachBatched(items, item => { result.push(action(item)); });
+ return result;
 }
