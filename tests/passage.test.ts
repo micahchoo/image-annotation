@@ -33,3 +33,49 @@ it('keeps standalone native IDs and rejects paragraphs inside fenced code',()=>{
  const fenced=new FakeEditor(['```text','','Paragraph inside code','','```'],{line:2,ch:1});
  expect(()=>anchorPassage(fenced as never)).toThrow(/outside a code block/);
 });
+
+it.each([
+ {lines:['    const important = 1;']}, {lines:['\tconst important = 1;']}, {lines:['1) Ordered item']},
+ {lines:['- item', '', '  continuation']}, {lines:['1. item', '', '   continuation']},
+ {lines:['Heading', '===']}, {lines:['Heading', '---']}, {lines:['a | b', '--- | ---']},
+ {lines:['---']}, {lines:['<div>', 'text', '</div>']}, {lines:['[label]: https://example.test']},
+ {lines:['# Heading']}, {lines:['> Quote']}, {lines:['~~~', 'code', '~~~']},
+])('refuses non-prose without changing text: $lines', ({lines}) => {
+ const selected = lines.findIndex(line => line.includes('continuation'));
+ const editor = new FakeEditor(lines, {line:selected < 0 ? 0 : selected,ch:0});
+ const before = [...editor.lines];
+ expect(() => anchorPassage(editor as never)).toThrow(/prose paragraph/);
+ expect(editor.lines).toEqual(before);
+});
+
+it('accepts prose following a completed list and preserves separated native anchors', () => {
+ const editor = new FakeEditor(['- item', '', 'New prose'], {line:2,ch:1});
+ expect(anchorPassage(editor as never)).toMatch(/^ia-/);
+ const anchored = new FakeEditor(['Prose', '', '^existing'], {line:0,ch:1});
+ expect(anchorPassage(anchored as never)).toBe('existing');
+});
+
+it.each([
+ {lines:['---','key: value','','field: value','---'],line:3},
+ {lines:['<div>','','body','','</div>'],line:2},
+ {lines:['<!--','','comment body','','-->'],line:2},
+ {lines:['$$','','equation','','$$'],line:2},
+])('refuses document-level non-prose context across blank lines: $lines',({lines,line})=>{
+ const editor=new FakeEditor(lines,{line,ch:1});const before=[...editor.lines];
+ expect(()=>anchorPassage(editor as never)).toThrow(/prose paragraph/);expect(editor.lines).toEqual(before);
+});
+
+it('accepts prose after frontmatter and closed HTML',()=>{
+ const editor=new FakeEditor(['---','key: value','---','','<div>','body','</div>','','Prose'],{line:8,ch:1});
+ expect(anchorPassage(editor as never)).toMatch(/^ia-/);
+});
+
+it('ignores HTML examples in a completed fenced code block',()=>{
+ const editor=new FakeEditor(['```html','<div>','```','','Prose'],{line:4,ch:1});
+ expect(anchorPassage(editor as never)).toMatch(/^ia-/);
+});
+
+it('accepts prose after a complete same-line display-math block',()=>{
+ const editor=new FakeEditor(['$$x + y$$','','Prose'],{line:2,ch:1});
+ expect(anchorPassage(editor as never)).toMatch(/^ia-/);
+});
