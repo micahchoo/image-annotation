@@ -1,6 +1,6 @@
 # Build Image Annotation
 
-Use Node.js 22 or later and Python 3. Run commands from this plugin's directory.
+Use Node.js 22.12 or later and Python 3. Run commands from this plugin's directory.
 
 ```sh
 npm ci
@@ -22,7 +22,8 @@ Update the version in `manifest.json`, `package.json`, and both root entries in 
 Add that version's minimum Obsidian version to `versions.json`. Update `docs/RELEASE-NOTES.md`.
 
 Run the release checks before creating a tag. The tag must match the manifest version without a `v` prefix.
-The GitHub release workflow repeats the checks, attests the artifacts, and publishes the three install files and ZIP.
+The GitHub release workflow repeats the checks, attests the artifacts, and publishes only the three Obsidian install files.
+The ZIP and checksums stay in the local release directory.
 The check workflow runs on pull requests and changes to the default branch.
 
 The README describes the release that users can install. Keep its screenshots and instructions aligned with that release.

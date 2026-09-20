@@ -1,14 +1,10 @@
-# 0.1.1
+# 0.1.2
 
-Mark part of an image, add a caption, and attach it to a note.
+- Fix clean dependency installation with npm 10 and npm 11 so Obsidian API types resolve during checks.
+- Publish only `main.js`, `manifest.json`, and `styles.css` as release assets.
+- Remove the CSS `!important` override while keeping unused controls hidden.
 
-- Draw rectangular or polygonal regions.
-- Attach regions to notes or paragraphs with Markdown captions.
-- Show an image and caption, or use a collapsed preview.
-- Rename or redraw saved regions without losing their note attachments.
-- Save web images in the vault for later use.
+Image and note pickers list vault file paths when you open them. This supports choosing existing images and notes.
+The plugin does not upload vault content.
 
-The plugin, installation folder, and release archive use the name Image Annotation.
 Requires Obsidian 1.8.7 or later.
-
-Includes the corrected lockfile for clean installations and release builds.

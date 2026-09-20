@@ -18,7 +18,7 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm install --global npm@11.16.0
+      - run: npm install --global npm@10.9.9
       - run: npm ci
       - run: npm audit --audit-level=moderate
       - run: npm run release:verify
@@ -30,11 +30,8 @@ jobs:
             release/main.js
             release/manifest.json
             release/styles.css
-            release/*.zip
-            release/INSTALLATION.json
-            release/SHA256SUMS
       - name: Publish verified assets
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes-file docs/RELEASE-NOTES.md release/*
+        run: gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes-file docs/RELEASE-NOTES.md release/main.js release/manifest.json release/styles.css

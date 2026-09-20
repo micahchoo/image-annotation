@@ -75,3 +75,12 @@ Obsidian loaded both caption bodies and resolved both attached notes under the n
 All source images, caption files, and attached notes exist at their recorded paths.
 The old plugin is disabled and its old install and data directories are absent.
 The complete release checks and artifact checksum checks passed after the rename.
+
+## 0.1.2 review fixes
+
+Removing the installed Obsidian type package reproduces 212 unsafe-call warnings, including the reported first lines in `main.ts`.
+Restoring the types produces a clean lint result without disabling any unsafe-type rules.
+The previous lockfile fails clean npm 10 installation with an esbuild platform error.
+Pinning Vite 7 and regenerating its lockfile lets Node 22/npm 10 install and run all 35 tests and release checks.
+CI now checks clean installations with npm 10 and npm 11.
+Public release uploads are limited to the three Obsidian install files.

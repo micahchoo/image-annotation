@@ -39,5 +39,5 @@
  .ia-image-modal { width: 100vw; }
  .region-editor__toolbar button { min-height: 36px; }
 }
-.region-editor [hidden], .ia-attach [hidden] { display: none !important; }
+.modal .region-editor [hidden], .modal .ia-attach [hidden] { display: none; }
 .region-reference-control-error { color: var(--text-error); font-size: var(--font-ui-small); }

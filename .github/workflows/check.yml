@@ -8,13 +8,16 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        npm: ["10.9.9", "11.16.0"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm install --global npm@11.16.0
+      - run: npm install --global npm@${{ matrix.npm }}
       - run: npm ci
       - run: npm audit --audit-level=moderate
       - run: npm run release:verify
