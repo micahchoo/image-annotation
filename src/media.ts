@@ -34,6 +34,18 @@ export async function prepareImage(app:App,candidate:ImageCandidate):Promise<Med
  let file:TFile;let originalUrl:string|undefined;
  if(/^https?:\/\//i.test(candidate.value)) {
   originalUrl=candidate.value;
+  // A HEAD request is only an early rejection. Some servers omit or lie about
+  // Content-Length, so the downloaded bytes remain the authoritative check.
+  let declaredTooLarge = false;
+  try {
+   const head=await requestUrl({url:originalUrl,method:'HEAD',throw:false});
+   const contentLength=head.headers['content-length']??head.headers['Content-Length'];
+   const declaredSize=contentLength===undefined?NaN:Number(contentLength);
+   declaredTooLarge=head.status>=200&&head.status<300&&Number.isFinite(declaredSize)&&declaredSize>40*1024*1024;
+  } catch {
+   // HEAD is best effort. Continue because many image hosts reject HEAD.
+  }
+  if(declaredTooLarge)throw new Error('This image exceeds the 40 MB snapshot limit.');
   const response=await requestUrl({url:originalUrl,throw:true});
   if(response.arrayBuffer.byteLength>40*1024*1024)throw new Error('This image exceeds the 40 MB snapshot limit.');
   const mime=(response.headers['content-type']??'').split(';')[0].trim();

@@ -84,3 +84,25 @@ The previous lockfile fails clean npm 10 installation with an esbuild platform e
 Pinning Vite 7 and regenerating its lockfile lets Node 22/npm 10 install and run all 35 tests and release checks.
 CI now checks clean installations with npm 10 and npm 11.
 Public release uploads are limited to the three Obsidian install files.
+
+## 0.1.3 refresh and cleanup checks
+
+Checked on 2026-09-19:
+
+- Official Obsidian lint and TypeScript checks passed.
+- All 52 behavior tests and the release validation script passed.
+- Production build and local release packaging passed.
+- Tests cover targeted connection invalidation, unchanged index reloads, external edits,
+  duplicate occurrence selection helpers, fenced reference cleanup, and caption retention.
+- Media tests cover early size rejection, unsupported or inaccurate HEAD responses,
+  retained caption/note/canvas references, unsaved editor content, reviewed candidate limits,
+  and references added between cleanup scans.
+
+The development vault loaded the new cleanup commands. A temporary-note desktop check
+reached the targeted refresh checks, but the Obsidian CLI stopped returning results during
+the remaining workflow. Duplicate selection and cleanup therefore have automated coverage,
+not a completed desktop runtime sign-off. Temporary test notes and captions were removed
+from the vault, and its original three regions and two attachments remain.
+
+No Android device was connected for a real-device check. Mobile touch behavior remains
+unverified; this update makes no new mobile compatibility claim. Publication is verified separately through the release workflow.

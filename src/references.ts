@@ -86,7 +86,7 @@ function createImage(host: PluginHost, region: Region): SVGSVGElement {
   if (geometry.type === 'polygon' && geometry.points.length >= 3) {
     const defs = createSvg('defs');
     const clip = createSvg('clipPath');
-    const id = `region-reference-clip-${Math.random().toString(36).slice(2)}`;
+    const id = `region-reference-clip-${crypto.randomUUID()}`;
     clip.setAttribute('id', id);
     const polygon = createSvg('polygon');
     polygon.setAttribute('points', geometry.points.map((point) => `${point.x * source.width},${point.y * source.height}`).join(' '));
@@ -102,12 +102,12 @@ function createImage(host: PluginHost, region: Region): SVGSVGElement {
 async function renderResolved(host: PluginHost, spec: ReferenceSpec, container: HTMLElement, component: Component): Promise<void> {
   const connection = host.getConnection(spec.connectionId);
   if (!connection) {
-    container.append(textElement('span', `Region reference “${spec.connectionId}” is unavailable.`, 'region-reference-fallback'));
+    container.append(textElement('span', `Region reference “${spec.connectionId}” is unavailable. Use Remove unavailable references to clean up this preview.`, 'region-reference-fallback'));
     return;
   }
   const region = host.getRegion(connection.regionId);
   if (!region) {
-    container.append(textElement('span', `Region “${connection.regionId}” is unavailable.`, 'region-reference-fallback'));
+    container.append(textElement('span', `Region “${connection.regionId}” is unavailable. Use Remove unavailable references to clean up this preview.`, 'region-reference-fallback'));
     return;
   }
 

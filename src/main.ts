@@ -5,7 +5,9 @@ import { mountRegionEditor } from './region-editor';
 import { parseReference, referenceMarkdown, renderReference } from './references';
 import { articleImages, ImageCandidate, isImage, prepareImage } from './media';
 import { anchorPassage } from './passage';
-import { locateReference } from './writing';
+import { locateReference, listReferenceOccurrences, listReferences, removeReferences } from './writing';
+import type { ReferenceSection } from './writing';
+import { scanMediaCleanup, trashUnusedMedia } from './media-cleanup';
 
 const message=(error:unknown)=>error instanceof Error?error.message:String(error);
 type TargetFactory=()=>PassageTarget;
@@ -18,13 +20,14 @@ class Picker<T> extends FuzzySuggestModal<T> {
 
 export default class ImageAnnotationPlugin extends Plugin implements PluginHost {
  store!:RegionStore;
- private listeners=new Set<()=>void>();
+ private listeners=new Map<()=>void,string>();
+ private pendingPaths=new Set<string>();
  private modals=new Set<Modal>();
  private imageMenus=new WeakMap<Menu,ImageCandidate>();
  private refreshTimer:number|undefined;
  async onload(){
   this.store=new RegionStore(this.app);
-  try{await this.store.load();}catch(e){new Notice(`Image Annotation: ${message(e)}`,10000);}
+  try{await this.store.load();this.store.takeChanges();}catch(e){new Notice(`Image Annotation: ${message(e)}`,10000);}
   this.addCommand({id:'annotate-image',name:'Annotate an image',callback:()=>this.chooseImage()});
   this.addCommand({id:'attach-evidence',name:'Attach an image region to this paragraph',editorCallback:(editor,view)=>{
    if(!view.file)return;
@@ -39,6 +42,8 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
    this.chooseEvidence(target);
   }});
   this.addCommand({id:'browse-regions',name:'Browse image regions',callback:()=>this.chooseRegion()});
+  this.addCommand({id:'clean-unused-snapshots',name:'Clean up unused image snapshots',callback:()=>this.run(()=>this.reviewUnusedMedia())});
+  this.addCommand({id:'clean-unavailable-references',name:'Remove unavailable references',callback:()=>this.run(()=>this.reviewUnavailableReferences())});
   this.addRibbonIcon('scan','Annotate an image',()=>this.chooseImage());
   this.registerEvent(this.app.workspace.on('file-menu',(menu,file)=>{
    if(file instanceof TFile&&isImage(file.path))this.addImageMenuItem(menu,{value:file.path,label:file.basename});
@@ -72,33 +77,49 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
      try{await renderReference(this,parseReference(source),staging,rendered);if(active&&ticket===generation)el.replaceChildren(...staging.childNodes);}catch(e){if(active&&ticket===generation){el.empty();el.createEl('p',{text:`Image Annotation: ${message(e)}`,cls:'ia-error'});}}
     });
    };
-   this.listeners.add(refresh);refresh();
+   this.listeners.set(refresh,parseReference(source).connectionId);refresh();
    child.registerDomEvent(el,'image-annotation-mode' as keyof HTMLElementEventMap,((event:CustomEvent<{mode?:unknown}>)=>{
     const mode=event.detail?.mode;if(mode!=='inline'&&mode!=='compact')return;
     const info=ctx.getSectionInfo(el);const file=this.app.vault.getAbstractFileByPath(ctx.sourcePath);
     if(!(file instanceof TFile))return;
     const spec=parseReference(source);
     this.run(async()=>{
-     let start=-1,end=-1;
-     const replace=(text:string)=>{
-      const lines=text.split('\n');
-      ({start,end}=locateReference(text,spec.connectionId,info));
-      lines.splice(start,end-start+1,referenceMarkdown(spec.connectionId,mode));return lines.join('\n');
+     const original=await this.noteText(file);
+     const apply=async(section?:ReferenceSection|null)=>{
+      await this.transformNote(file,text=>{
+       if(text!==original)throw new Error('The note changed. Choose the reference again.');
+       const {start,end}=locateReference(text,spec.connectionId,section);
+       const newline=text.includes('\r\n')?'\r\n':'\n';
+       const lines=text.split(/\r?\n/);
+       lines.splice(start,end-start+1,referenceMarkdown(spec.connectionId,mode).replace(/\n/g,newline));return lines.join(newline);
+      });
+      // The source processor reruns for the edited occurrence, which may be a
+      // different duplicate from the one whose controls opened the picker.
      };
-     const view=this.app.workspace.getLeavesOfType('markdown').map(l=>l.view).find(v=>v instanceof MarkdownView&&v.file?.path===file.path) as MarkdownView|undefined;
-     if(view){replace(view.editor.getValue());view.editor.replaceRange(referenceMarkdown(spec.connectionId,mode),{line:start,ch:0},{line:end,ch:view.editor.getLine(end).length});}
-     else await this.app.vault.process(file,replace);
-     source=`${spec.connectionId}\n${mode}`;refresh();
+     const matches=listReferenceOccurrences(original,spec.connectionId);
+     if(!info&&matches.length>1){
+      const lines=original.split(/\r?\n/);
+      new Picker(this.app,matches,item=>`Line ${item.start+1} · ${item.mode} · ${lines.slice(Math.max(0,item.start-2),item.start).join(' ').trim()||'Start of note'}`,item=>this.run(()=>apply({lineStart:item.start,lineEnd:item.end})),'Choose the reference to change').open();
+     }else await apply(info);
     });
    }) as EventListener);
   });
   this.registerEvent(this.app.vault.on('rename',(file,oldPath)=>this.run(async()=>{await this.store.rename(oldPath,file.path);this.changed();})));
   this.registerEvent(this.app.vault.on('modify',file=>{
-   if(file.path==='Image Annotation/index.json'||file.path.startsWith('Image Annotation/Captions/')){
-    window.clearTimeout(this.refreshTimer);this.refreshTimer=window.setTimeout(()=>this.run(async()=>{await this.store.load();this.changed();}),150);
-   }
+   this.pendingPaths.add(file.path);
+   window.clearTimeout(this.refreshTimer);this.refreshTimer=window.setTimeout(()=>this.run(async()=>{
+    const paths=this.pendingPaths;this.pendingPaths=new Set();
+    if(paths.has('Image Annotation/index.json'))await this.store.load();
+    const ids=this.store.takeChanges();
+    for(const path of paths)if(path!=='Image Annotation/index.json')for(const id of this.store.connectionsForPath(path))ids.add(id);
+    this.changed(ids);
+   }),150);
   }));
-  this.registerEvent(this.app.vault.on('delete',()=>this.changed()));
+  this.registerEvent(this.app.vault.on('delete',file=>this.run(async()=>{
+   const ids=this.store.connectionsForPath(file.path);
+   if(file.path==='Image Annotation/index.json'||file.path==='Image Annotation')await this.store.load();
+   this.changed(new Set([...ids,...this.store.takeChanges()]));
+  })));
   this.register(()=>window.clearTimeout(this.refreshTimer));
  }
  onunload(){for(const modal of this.modals)modal.close();this.modals.clear();this.listeners.clear();}
@@ -109,7 +130,7 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
   menu.addItem(item=>item.setTitle('Annotate image').setIcon('scan').onClick(()=>this.run(()=>this.openImage(this.imageMenus.get(menu)!))));
  }
  run(action:()=>Promise<unknown>){void action().catch(e=>new Notice(`Image Annotation: ${message(e)}`,8000));}
- changed(){for(const listener of this.listeners)listener();}
+ changed(ids=this.store.takeChanges()){for(const [listener,id] of this.listeners)if(ids.has(id))listener();}
  track(modal:Modal){this.modals.add(modal);modal.open();}
  untrack(modal:Modal){this.modals.delete(modal);}
  getRegion(id:string){return this.store.getRegion(id);}
@@ -149,6 +170,47 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
   new Picker(this.app,choices,c=>c.label,c=>c.action(),'Attach an image region').open();
  }
  attach(region:Region,target?:TargetFactory){this.track(new AttachModal(this,region,target));}
+ private openNote(file:TFile):MarkdownView|undefined {
+  return this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view).find((view):view is MarkdownView=>view instanceof MarkdownView&&view.file?.path===file.path);
+ }
+ private async noteText(file:TFile):Promise<string>{return this.openNote(file)?.editor.getValue()??await this.app.vault.read(file);}
+ private async transformNote(file:TFile,transform:(text:string)=>string):Promise<void>{
+  const view=this.openNote(file);
+  if(!view){await this.app.vault.process(file,transform);return;}
+  const editor=view.editor,text=editor.getValue(),next=transform(text);
+  if(text===next)return;
+  let start=0;while(start<text.length&&start<next.length&&text[start]===next[start])start++;
+  let end=text.length,nextEnd=next.length;while(end>start&&nextEnd>start&&text[end-1]===next[nextEnd-1]){end--;nextEnd--;}
+  editor.replaceRange(next.slice(start,nextEnd),editor.offsetToPos(start),editor.offsetToPos(end));
+ }
+ async removeNoteReferences(ids:Set<string>):Promise<void>{
+  for(const file of this.app.vault.getMarkdownFiles()){
+   if(!listReferences(await this.noteText(file)).some(reference=>ids.has(reference.connectionId)))continue;
+   await this.transformNote(file,text=>removeReferences(text,ids));
+  }
+ }
+ private async reviewUnusedMedia():Promise<void>{
+  if([...this.modals].some(modal=>modal instanceof ImageModal)){new Notice('Close the image editor before cleaning up snapshots.');return;}
+  await this.store.load();this.changed();
+  const report=await scanMediaCleanup(this.app,this.store.allRegions());
+  if(!report.candidates.length){new Notice('No unused image snapshots found.');return;}
+  this.track(new ReviewModal(this,'Clean up unused image snapshots',report.candidates.map(file=>`${file.path} (${Math.ceil(file.size/1024)} KB)`),'Move to trash',async()=>{
+   if([...this.modals].some(modal=>modal instanceof ImageModal))throw new Error('Close the image editor before cleaning up snapshots.');
+   const removed=await trashUnusedMedia(this.app,async()=>{await this.store.load();this.changed();return this.store.allRegions();},report.candidates.map(file=>file.path));
+   new Notice(`${removed.length} unused image snapshots moved to trash. Images now in use were kept.`);
+  }));
+ }
+ private async reviewUnavailableReferences():Promise<void>{
+  await this.store.load();this.changed();
+  const files:TFile[]=[];
+  for(const file of this.app.vault.getMarkdownFiles())if(listReferences(await this.noteText(file)).some(reference=>!this.getConnection(reference.connectionId)))files.push(file);
+  if(!files.length){new Notice('No unavailable references found.');return;}
+  this.track(new ReviewModal(this,'Remove unavailable references',files.map(file=>file.path),'Remove references',async()=>{
+   await this.store.load();this.changed();
+   for(const file of files)await this.transformNote(file,text=>removeReferences(text,listReferences(text).filter(reference=>!this.getConnection(reference.connectionId)).map(reference=>reference.connectionId)));
+   new Notice('Unavailable references removed. Captions and surrounding text were kept.');
+  }));
+ }
  async insertReference(connection:Connection,mode:'inline'|'compact'){
   const file=this.app.vault.getAbstractFileByPath(connection.notePath);if(!(file instanceof TFile))throw new Error('The attached note is missing. The caption is still saved.');
   const caption=this.app.vault.getAbstractFileByPath(connection.captionPath);
@@ -172,13 +234,14 @@ class ImageModal extends Modal {
  constructor(private plugin:ImageAnnotationPlugin,private source:MediaSource,private target?:TargetFactory,private selectedId?:string){super(plugin.app);}
  onOpen(){
   this.modalEl.addClass('ia-image-modal');this.setTitle('Annotate image');this.component.load();
+  const cleanupLabel=this.contentEl.createEl('label');const cleanup=cleanupLabel.createEl('input',{type:'checkbox'});cleanupLabel.appendText(' When deleting a region, remove its previews from notes. Keep captions.');
   const canvas=this.contentEl.createDiv({cls:'ia-editor-host'});const attached=this.contentEl.createDiv({cls:'ia-attached'});
   this.handle=mountRegionEditor(canvas,{source:this.source,imageUrl:this.plugin.resourceUrl(this.source),regions:this.plugin.store.allRegions().filter(r=>r.source.path===this.source.path),selectedId:this.selectedId,
    onCreate:async(geometry,title)=>{const region=await this.plugin.store.createRegion(this.source,geometry,title);this.plugin.changed();new Notice('Region saved. Attach it to a note to add a caption.');return region;},
    onSelect:region=>{attached.empty();attached.createEl('h3',{text:`Notes attached to “${region.title}”`});const connections=this.plugin.getConnections(region.id);if(!connections.length)attached.createEl('p',{text:'No notes attached. Attach this region to a note to add a caption.'});for(const connection of connections){const row=attached.createDiv({cls:'ia-attached-row'});const link=row.createEl('button',{text:connection.notePath+(connection.blockId?' · paragraph':'')});link.onclick=()=>this.plugin.run(()=>this.plugin.openTarget(connection));const body=row.createDiv();this.plugin.run(async()=>{await MarkdownRenderer.render(this.app,await this.plugin.readCaption(connection),body,connection.captionPath,this.component);});const edit=row.createEl('button',{text:'Edit caption'});edit.onclick=()=>this.plugin.editCaption(connection);}},
    onAttach:region=>this.plugin.attach(region,this.target),
    onUpdate:async(region,geometry,title)=>{const updated=await this.plugin.store.updateRegion(region.id,geometry,title);this.plugin.changed();return updated;},
-   onDelete:async(region)=>{await this.plugin.store.removeRegion(region.id);attached.empty();this.plugin.changed();new Notice('Region removed. Caption notes were kept.');},
+   onDelete:async(region)=>{await this.plugin.store.load();const ids=new Set(this.plugin.getConnections(region.id).map(connection=>connection.id));await this.plugin.store.removeRegion(region.id);attached.empty();this.plugin.changed();if(cleanup.checked){try{await this.plugin.removeNoteReferences(ids);}catch(e){new Notice(`Region removed, but some previews remain: ${message(e)}. Run Remove unavailable references to retry.`,10000);return;}}new Notice('Region removed. Caption notes were kept.');},
    onOpenArticle:()=>this.plugin.run(()=>this.plugin.openArticle({source:this.source} as Region))
   });
  }
@@ -215,6 +278,20 @@ class AttachModal extends Modal {
    try{await this.plugin.insertReference(connection,mode.value as 'inline'|'compact');}catch(e){new Notice(`Caption saved, but the preview could not be added: ${message(e)}`,10000);this.close();return;}
    new Notice('Image region attached to note.');this.close();await this.plugin.openTarget(connection);
   })().catch(e=>{error.setText(message(e));save.disabled=false;});};
+ }
+ onClose(){this.contentEl.empty();this.plugin.untrack(this);}
+}
+
+class ReviewModal extends Modal {
+ constructor(private plugin:ImageAnnotationPlugin,private title:string,private paths:string[],private actionLabel:string,private action:()=>Promise<void>){super(plugin.app);}
+ onOpen(){
+  this.setTitle(this.title);
+  this.contentEl.createEl('p',{text:'Review the affected files before continuing.'});
+  const list=this.contentEl.createEl('ul');for(const path of this.paths)list.createEl('li',{text:path});
+  const error=this.contentEl.createEl('p',{cls:'ia-error'});error.setAttribute('role','alert');
+  const cancel=this.contentEl.createEl('button',{text:'Cancel'});cancel.onclick=()=>this.close();
+  const apply=this.contentEl.createEl('button',{text:this.actionLabel,cls:'mod-warning'});
+  apply.onclick=()=>{apply.disabled=true;cancel.disabled=true;void this.action().then(()=>this.close()).catch((reason:unknown)=>{error.setText(message(reason));apply.disabled=false;cancel.disabled=false;});};
  }
  onClose(){this.contentEl.empty();this.plugin.untrack(this);}
 }

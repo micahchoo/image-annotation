@@ -19,7 +19,8 @@ For lists, tables, headings, and code blocks, attach to the whole note instead.
 - **Show image and caption** keeps the preview expanded.
 
 Previews work in Reading view and Live Preview.
-If the same attachment appears twice in a note, change its display in Reading view.
+If a note contains duplicate references, Live Preview offers a line picker when it cannot identify the clicked occurrence.
+Choose the line whose display you want to change. Reading view identifies the occurrence directly.
 
 ## Edit a region
 
@@ -29,6 +30,17 @@ The region keeps its existing note attachments.
 
 To delete a region, select **Delete region**, then select the confirmation button.
 Deletion removes the region and its attachments from the index. Caption files remain in the vault.
+Select **When deleting a region, remove its previews from notes** to remove its fenced previews too.
+Surrounding writing and caption links remain unchanged.
+
+Run **Image Annotation: Remove unavailable references** to review notes with broken region previews and remove those previews.
+
+## Clean up snapshots
+
+Run **Image Annotation: Clean up unused image snapshots** to review unused downloads and move them to trash.
+The command checks again before removal. It keeps snapshots used by regions, captions, notes, or canvases.
+Open Markdown editor text also protects images that have not yet been saved.
+Close image editors before cleanup. Local images outside the snapshot folder are not candidates.
 
 ## Captions and links
 
@@ -68,5 +80,7 @@ The image website receives that request. The plugin does not upload notes, capti
 There are no accounts, telemetry, or remote processing services.
 
 Web images must have a direct image URL. Supported formats are PNG, JPEG, WebP, GIF, BMP, and AVIF.
-Images larger than 40 MB are rejected after download. This limit does not cap network transfer size.
+The plugin first asks the server for the image size and rejects declared sizes above 40 MB.
+If the server omits or rejects that request, the plugin checks the downloaded bytes instead.
+This fallback does not cap network transfer or peak memory use.
 Local SVG images also work. Video and audio annotation are not supported.

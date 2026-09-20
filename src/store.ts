@@ -11,6 +11,9 @@ const BODY_END = '<!-- image-annotation:end -->';
 
 export class RegionStore {
   private data: RegionData = { version: 1, regions: [], connections: [] };
+  private regionsById = new Map<string, Region>();
+  private connectionsById = new Map<string, Connection>();
+  private pendingChanges = new Set<string>();
   private loaded = false;
   private diskIndex: string | null = null;
   private queue: Promise<unknown> = Promise.resolve();
@@ -21,7 +24,7 @@ export class RegionStore {
   async load(): Promise<void> {
     await this.enqueue(async () => {
       const current = await this.readDisk();
-      this.data = current.data;
+      this.adopt(current.data);
       this.diskIndex = current.raw;
       this.loaded = true;
     });
@@ -32,12 +35,12 @@ export class RegionStore {
   }
 
   getRegion(id: string): Region | undefined {
-    const region = this.data.regions.find(item => item.id === id);
+    const region = this.regionsById.get(id);
     return region ? copy(region) : undefined;
   }
 
   getConnection(id: string): Connection | undefined {
-    const connection = this.data.connections.find(item => item.id === id);
+    const connection = this.connectionsById.get(id);
     return connection ? copy(connection) : undefined;
   }
 
@@ -153,7 +156,7 @@ export class RegionStore {
     return this.enqueue(async () => {
       if (!this.loaded) throw new Error('RegionStore.load() must be awaited before mutation');
       const current = await this.readDisk();
-      this.data = current.data;
+      this.adopt(current.data);
       this.diskIndex = current.raw;
       return fn();
     });
@@ -180,8 +183,38 @@ export class RegionStore {
       if (expected !== null) throw new Error('Image Annotation/index.json disappeared; reload and retry');
       await this.app.vault.create(INDEX, serialized);
     }
-    this.data = next;
+    this.adopt(next);
     this.diskIndex = serialized;
+  }
+
+  /** Consume invalidations once; unchanged reloads and own-write echoes are silent. */
+  takeChanges(): Set<string> {
+    const changes = this.pendingChanges;
+    this.pendingChanges = new Set();
+    return changes;
+  }
+
+  connectionsForPath(path: string): Set<string> {
+    const matches = (value: string) => value === path || value.startsWith(`${path}/`);
+    const regions = new Set(this.data.regions.filter(region => matches(region.source.path) || (region.source.articlePath && matches(region.source.articlePath))).map(region => region.id));
+    return new Set(this.data.connections.filter(connection => regions.has(connection.regionId) || matches(connection.captionPath) || matches(connection.notePath)).map(connection => connection.id));
+  }
+
+  private adopt(next: RegionData): void {
+    if (next === this.data) return;
+    const regions = new Map(next.regions.map(region => [region.id, region]));
+    const connections = new Map(next.connections.map(connection => [connection.id, connection]));
+    const changedRegions = new Set<string>();
+    for (const id of new Set([...this.regionsById.keys(), ...regions.keys()])) {
+      if (JSON.stringify(this.regionsById.get(id)) !== JSON.stringify(regions.get(id))) changedRegions.add(id);
+    }
+    for (const id of new Set([...this.connectionsById.keys(), ...connections.keys()])) {
+      const before = this.connectionsById.get(id), after = connections.get(id);
+      if (JSON.stringify(before) !== JSON.stringify(after) || (before && changedRegions.has(before.regionId)) || (after && changedRegions.has(after.regionId))) this.pendingChanges.add(id);
+    }
+    this.data = next;
+    this.regionsById = regions;
+    this.connectionsById = connections;
   }
 
   private async readDisk(): Promise<{ data: RegionData; raw: string | null }> {
@@ -189,6 +222,7 @@ export class RegionStore {
     if (!file) return { data: { version: 1, regions: [], connections: [] }, raw: null };
     if (!isFile(file) || file.extension !== 'json') throw new Error('Image Annotation/index.json is not a regular file');
     const raw = await this.app.vault.read(file);
+    if (this.loaded && raw === this.diskIndex) return { data: this.data, raw };
     let value: unknown;
     try { value = JSON.parse(raw); } catch { throw new Error('Image Annotation/index.json is corrupt JSON'); }
     return { data: validateData(value), raw };

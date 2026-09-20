@@ -110,4 +110,42 @@ describe('RegionStore', () => {
     expect(store.getConnections(region.id)).toHaveLength(1);
   });
 
+  it('invalidates only previews connected to changed regions and ignores own-write reloads', async () => {
+    const vault = new FakeVault();
+    const store = new RegionStore(app(vault));
+    await store.load();
+    const first = await store.createRegion(source, rect, 'First');
+    const second = await store.createRegion(source, rect, 'Second');
+    const a = await store.connect(first.id, { notePath: 'a.md' }, 'A');
+    const b = await store.connect(second.id, { notePath: 'b.md' }, 'B');
+    store.takeChanges();
+    await store.updateRegion(first.id, rect, 'Changed');
+    expect([...store.takeChanges()]).toEqual([a.id]);
+    await store.load();
+    expect(store.takeChanges().size).toBe(0);
+    expect([...store.connectionsForPath(b.captionPath)]).toEqual([b.id]);
+    expect(store.connectionsForPath('unrelated.md').size).toBe(0);
+    await store.removeRegion(first.id);
+    expect([...store.takeChanges()]).toEqual([a.id]);
+    expect(store.getConnection(a.id)).toBeUndefined();
+    expect(store.getConnection(b.id)).toEqual(b);
+  });
+
+  it('adopts externally changed records and invalidates their existing previews', async () => {
+    const vault = new FakeVault();
+    const store = new RegionStore(app(vault));
+    await store.load();
+    const region = await store.createRegion(source, rect, 'Original');
+    const connection = await store.connect(region.id, { notePath: 'a.md' }, 'Caption');
+    store.takeChanges();
+    const index = vault.files.get('Image Annotation/index.json')!;
+    index.text = index.text.replace('Original', 'External');
+    await store.load();
+    expect(store.getRegion(region.id)?.title).toBe('External');
+    expect([...store.takeChanges()]).toEqual([connection.id]);
+    index.text = '{bad';
+    await expect(store.load()).rejects.toThrow(/corrupt/);
+    expect(store.getRegion(region.id)?.title).toBe('External');
+  });
+
 });
