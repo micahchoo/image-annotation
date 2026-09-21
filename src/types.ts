@@ -1,4 +1,4 @@
-import type { App, Component } from 'obsidian';
+import type { App } from 'obsidian';
 export interface Point { x: number; y: number }
 export type Geometry = { type: 'rect'; x: number; y: number; width: number; height: number } | { type: 'polygon'; points: Point[] };
 export interface MediaSource { path: string; originalUrl?: string; articlePath?: string; articleLine?: number; width: number; height: number }
@@ -7,6 +7,13 @@ export interface Connection { id: string; regionId: string; notePath: string; bl
 export interface RegionData { version: 1; regions: Region[]; connections: Connection[] }
 export interface PassageTarget { notePath: string; blockId?: string }
 export interface ReferenceSpec { connectionId: string; mode: 'inline' | 'compact' }
+/**
+ * Every image path the regions use, frozen, from the store. Media cleanup may
+ * hold one across a whole operation and read it once: the store hands over a
+ * new object when the regions change and the same one until then. A Region
+ * array is never held that way, because its caller may mutate it.
+ */
+export interface PathSnapshot { readonly paths: readonly string[] }
 export interface PluginHost {
  app: App;
  getRegion(id: string): Region | undefined;
@@ -32,4 +39,3 @@ export interface RegionEditorOptions {
  onOpenArticle?: () => void;
 }
 export interface RegionEditorHandle { destroy(): void; select(id: string): void }
-export type ReferenceRenderer = (host: PluginHost, spec: ReferenceSpec, container: HTMLElement, component: Component) => Promise<void>;

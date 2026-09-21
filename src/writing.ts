@@ -1,3 +1,5 @@
+import { FENCE, REFERENCE_LINES, isReferenceAt, referenceMarkdown } from './reference-format';
+
 export interface ReferenceSection {
   lineStart: number;
   lineEnd: number;
@@ -13,13 +15,6 @@ export interface ReferenceLocation {
 export interface ReferenceOccurrence extends ReferenceLocation {
   connectionId: string;
   mode: 'inline' | 'compact';
-}
-
-function isReference(lines: string[], start: number, connectionId: string): boolean {
-  return lines[start] === '```image-annotation'
-    && lines[start + 1] === connectionId
-    && (lines[start + 2] === 'inline' || lines[start + 2] === 'compact')
-    && lines[start + 3] === '```';
 }
 
 type Fence = { character: '`' | '~'; length: number };
@@ -45,11 +40,11 @@ function scanReferences(text: string): ReferenceOccurrence[] {
     }
     const opening = openingFence(lines[line]);
     if (!opening) continue;
-    if (opening.character === '`' && opening.length === 3 && lines[line] === '```image-annotation') {
-      if (isReference(lines, line, lines[line + 1] ?? '')) {
+    if (opening.character === '`' && opening.length === 3 && lines[line] === FENCE) {
+      if (isReferenceAt(lines, line)) {
         const mode = lines[line + 2] as 'inline' | 'compact';
-        matches.push({ start: line, end: line + 3, connectionId: lines[line + 1], mode });
-        line += 3;
+        matches.push({ start: line, end: line + REFERENCE_LINES - 1, connectionId: lines[line + 1], mode });
+        line += REFERENCE_LINES - 1;
         continue;
       }
     }
@@ -94,10 +89,10 @@ export function locateReference(text: string, connectionId: string, section?: Re
 
   if (section) {
     const { lineStart, lineEnd } = section;
-    if (!Number.isInteger(lineStart) || !Number.isInteger(lineEnd) || lineStart < 0 || lineEnd !== lineStart + 3 || lineEnd >= lines.length) {
+    if (!Number.isInteger(lineStart) || !Number.isInteger(lineEnd) || lineStart < 0 || lineEnd !== lineStart + REFERENCE_LINES - 1 || lineEnd >= lines.length) {
       throw new Error('The reference moved. Reopen the note before changing its display.');
     }
-    if (!isReference(lines, lineStart, connectionId)) {
+    if (!isReferenceAt(lines, lineStart, connectionId)) {
       throw new Error('The reference moved. Reopen the note before changing its display.');
     }
     return { start: lineStart, end: lineEnd };
@@ -110,4 +105,31 @@ export function locateReference(text: string, connectionId: string, section?: Re
       : 'The reference appears more than once. Open the note in Reading view and retry.');
   }
   return { start: matches[0].start, end: matches[0].end };
+}
+
+/** The block id a line ends with, if any: ` ^id` at the end, or a line that is only `^id`. */
+export function blockIdOf(line: string): string | undefined {
+  return /(?:^|\s)\^([A-Za-z0-9-]+)\s*$/.exec(line)?.[1];
+}
+
+/**
+ * Insert `addition` after the paragraph carrying `blockId`, or at the end of the
+ * note when the connection names no paragraph. Line endings are the note's own.
+ */
+export function insertAfterBlock(text: string, blockId: string | undefined, addition: string): string {
+  if (!blockId) return text + addition;
+  const lines = text.split('\n');
+  const index = lines.findIndex(line => blockIdOf(line) === blockId);
+  if (index < 0) throw new Error('The linked paragraph moved or was removed. Caption saved; use the region browser to open it.');
+  lines.splice(index + 1, 0, addition);
+  return lines.join('\n');
+}
+
+/** Rewrite one reference's display mode in place, keeping the note's line endings. */
+export function replaceReferenceMode(text: string, connectionId: string, mode: 'inline' | 'compact', section?: ReferenceSection | null): string {
+  const { start, end } = locateReference(text, connectionId, section);
+  const newline = text.includes('\r\n') ? '\r\n' : '\n';
+  const lines = text.split(/\r?\n/);
+  lines.splice(start, end - start + 1, referenceMarkdown(connectionId, mode).replace(/\n/g, newline));
+  return lines.join(newline);
 }

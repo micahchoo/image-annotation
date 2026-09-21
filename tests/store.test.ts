@@ -256,5 +256,5 @@ it('rejects a malformed last record after yielding without publishing a partiall
  const vault=new FakeVault(),store=new RegionStore(app(vault));await store.load();const initial=await store.createRegion(source,rect,'Keep');
  const regions=Array.from({length:10000},(_,i)=>({...initial,id:`external-${i}`}));
  const index=vault.files.get('Image Annotation/index.json')!;index.text=JSON.stringify({version:1,regions:[...regions,{...initial,id:'bad',source:{...source,width:0}}],connections:[]});
- await expect(store.load()).rejects.toThrow(/dimensions/);expect(store.allRegions()).toEqual([initial]);expect(store.imagePaths()).toEqual([source.path]);
+ await expect(store.load()).rejects.toThrow(/dimensions/);expect(store.allRegions()).toEqual([initial]);expect(store.imagePaths().paths).toEqual([source.path]);
 });

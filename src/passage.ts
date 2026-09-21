@@ -1,4 +1,5 @@
 import type { Editor } from 'obsidian';
+import { blockIdOf } from './writing';
 /** Anchor a single paragraph, preserving an existing native Obsidian block ID. */
 export function anchorPassage(editor:Editor):string {
  const from=editor.getCursor('from'),to=editor.getCursor('to');
@@ -15,10 +16,10 @@ export function anchorPassage(editor:Editor):string {
   if(match) {if(!fence)fence=match[1];else if(match[1][0]===fence[0]&&match[1].length>=fence.length)fence=undefined;}
  }
  if(fence)throw new Error('Choose a prose paragraph outside a code block.');
- const old=lines.at(-1)!.match(/(?:^|\s)\^([a-zA-Z0-9-]+)\s*$/);
- if(old)return old[1];
- const separate=end+2<=editor.lastLine()?editor.getLine(end+2).match(/^\^([a-zA-Z0-9-]+)\s*$/):null;
- if(separate)return separate[1];
+ const old=blockIdOf(lines.at(-1)!);
+ if(old)return old;
+ const separate=end+2<=editor.lastLine()?blockIdOf(editor.getLine(end+2)):undefined;
+ if(separate&&/^\^/.test(editor.getLine(end+2)))return separate;
  const id=`ia-${crypto.randomUUID().slice(0,12)}`;
  editor.replaceRange(` ^${id}`,{line:end,ch:editor.getLine(end).length});
  return id;

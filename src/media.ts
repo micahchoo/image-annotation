@@ -1,7 +1,9 @@
 import { App, TFile, normalizePath, requestUrl } from 'obsidian';
 import type { MediaSource } from './types';
+import { ensureFolder } from './folders';
+import { IMG_TAG, isImage } from './image-paths';
+export { isImage } from './image-paths';
 export interface ImageCandidate { value: string; label: string; articlePath?: string; articleLine?: number }
-export const isImage = (path: string): boolean => /\.(png|jpe?g|webp|gif|bmp|svg|avif)$/i.test(path.split(/[?#]/)[0]);
 export function articleImages(text: string, articlePath: string): ImageCandidate[] {
  const result: ImageCandidate[]=[];
  const add=(value:string,label:string,offset:number)=> {
@@ -21,11 +23,8 @@ export function articleImages(text: string, articlePath: string): ImageCandidate
   }
   if(depth===0)add(text.slice(start,i).replace(/\\([()])/g,'$1'),m[1],m.index);
  }
- for(const m of text.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi))add(m[1].replace(/&amp;/g,'&'),'Image',m.index);
+ for(const m of text.matchAll(IMG_TAG))add(m[1].replace(/&amp;/g,'&'),'Image',m.index);
  return result.sort((a,b)=>(a.articleLine??0)-(b.articleLine??0));
-}
-async function folder(app:App,path:string):Promise<void> {
- let current='';for(const part of path.split('/')) {current=current ? `${current}/${part}`:part;if(!app.vault.getAbstractFileByPath(current)) {try{await app.vault.createFolder(current);}catch(e){if(!app.vault.getAbstractFileByPath(current))throw e;}}}
 }
 async function dimensions(url:string):Promise<{width:number;height:number}> {
  return new Promise((resolve,reject)=>{ const img=new Image();const timer=window.setTimeout(()=>{img.src='';reject(new Error('Image took too long to load.'));},20000);img.onload=()=>{window.clearTimeout(timer);resolve({width:img.naturalWidth,height:img.naturalHeight});};img.onerror=()=>{window.clearTimeout(timer);reject(new Error('This image could not be opened.'));};img.src=url; });
@@ -53,7 +52,7 @@ export async function prepareImage(app:App,candidate:ImageCandidate):Promise<Med
   if(!extension)throw new Error('Remote snapshots support PNG, JPEG, WebP, GIF, BMP, and AVIF images.');
   // Include content bytes in the identity: changed remote files become new snapshots.
   const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',response.arrayBuffer))).map(b=>b.toString(16).padStart(2,'0')).join('');
-  await folder(app,'Image Annotation/Media');
+  await ensureFolder(app,'Image Annotation/Media');
   const path=`Image Annotation/Media/${hash}.${extension}`;
   const existing=app.vault.getAbstractFileByPath(path);
   file=existing instanceof TFile?existing:await app.vault.createBinary(path,response.arrayBuffer);

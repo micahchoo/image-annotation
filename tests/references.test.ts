@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseReference, referenceMarkdown } from '../src/reference-format';
+import { FENCE, LANGUAGE, REFERENCE_LINES, isReferenceAt, parseReference, referenceMarkdown } from '../src/reference-format';
 
 describe('region references', () => {
   it('parses a simple two-line body', () => {
@@ -19,5 +19,19 @@ describe('region references', () => {
   it('rejects unsafe ids when generating Markdown', () => {
     expect(() => referenceMarkdown('connection 1', 'inline')).toThrow();
     expect(() => referenceMarkdown('connection-1\nother', 'inline')).toThrow();
+  });
+});
+
+describe('the one shape of a reference', () => {
+  it('is what the renderer writes, what the scanner finds, and what the processor is registered for', () => {
+    const lines = referenceMarkdown('connection-1', 'inline').split('\n');
+    expect(lines).toHaveLength(REFERENCE_LINES);
+    expect(lines[0]).toBe(FENCE);
+    expect(FENCE.endsWith(LANGUAGE)).toBe(true);
+    expect(isReferenceAt(lines, 0)).toBe(true);
+    expect(isReferenceAt(lines, 0, 'connection-1')).toBe(true);
+    expect(isReferenceAt(lines, 0, 'other')).toBe(false);
+    expect(isReferenceAt(['```image-annotation', 'connection-1', 'wide', '```'], 0)).toBe(false);
+    expect(isReferenceAt(['```image-annotation', '', 'inline', '```'], 0)).toBe(false);
   });
 });

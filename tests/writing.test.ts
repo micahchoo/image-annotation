@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { listReferenceOccurrences, listReferences, locateReference, removeReferences } from '../src/writing';
+import { blockIdOf, insertAfterBlock, listReferenceOccurrences, listReferences, locateReference, removeReferences, replaceReferenceMode } from '../src/writing';
 
 const block = (id = 'connection-1', mode = 'inline') => `\`\`\`image-annotation\n${id}\n${mode}\n\`\`\``;
 
@@ -62,4 +62,24 @@ describe('reference scanning and cleanup', () => {
 it('preserves mixed line endings in text outside removed references', () => {
  const text = `Before\r\n${block()}\nAfter\r\n`;
  expect(removeReferences(text, ['connection-1'])).toBe('Before\r\nAfter\r\n');
+});
+
+describe('the edits a note takes', () => {
+  it('reads a block id at the end of a line, or on a line of its own, and nothing else', () => {
+    expect(blockIdOf('Prose. ^abc-1')).toBe('abc-1');
+    expect(blockIdOf('^lone')).toBe('lone');
+    expect(blockIdOf('Prose. ^abc-1\r')).toBe('abc-1');
+    expect(blockIdOf('no^id here')).toBeUndefined();
+    expect(blockIdOf('math a^2')).toBeUndefined();
+  });
+  it('inserts after the paragraph that carries the id, and at the end when there is none', () => {
+    const text = 'One ^p1\n\nTwo ^p2\n';
+    expect(insertAfterBlock(text, 'p1', '\n\nREF\n')).toBe('One ^p1\n\n\nREF\n\n\nTwo ^p2\n');
+    expect(insertAfterBlock(text, undefined, '\n\nREF\n')).toBe(`${text}\n\nREF\n`);
+    expect(() => insertAfterBlock(text, 'gone', 'x')).toThrow(/moved or was removed/);
+  });
+  it('swaps a reference mode in place and keeps CRLF', () => {
+    const text = `Intro\r\n\r\n${block('c-1', 'inline').replaceAll('\n', '\r\n')}\r\nAfter`;
+    expect(replaceReferenceMode(text, 'c-1', 'compact')).toBe(`Intro\r\n\r\n${block('c-1', 'compact').replaceAll('\n', '\r\n')}\r\nAfter`);
+  });
 });

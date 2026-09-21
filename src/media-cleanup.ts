@@ -1,5 +1,6 @@
 import { App, TFile, normalizePath, type EventRef, type TAbstractFile } from 'obsidian';
-import type { Region } from './types';
+import type { PathSnapshot, Region } from './types';
+import { IMG_TAG, isImage } from './image-paths';
 
 const MEDIA_ROOT = 'Image Annotation/Media';
 
@@ -20,10 +21,6 @@ function imagePath(value: string): string {
   return normalizePath(result.split(/[?#]/, 1)[0]);
 }
 
-function isImagePath(path: string): boolean {
-  return /\.(?:png|jpe?g|webp|gif|bmp|svg|avif)$/i.test(path);
-}
-
 function isReferenceDocument(file: TFile): boolean {
   return ['md', 'canvas', 'json'].includes(file.extension.toLowerCase());
 }
@@ -37,20 +34,20 @@ function references(text: string): string[] {
   // Wiki links include ordinary note links as well as embeds. Protect both.
   for (const match of text.matchAll(/!?\[\[([^\]]+)\]\]/g)) {
     const target = match[1].split('|', 1)[0].split('#', 1)[0].split('^', 1)[0].trim();
-    if (isImagePath(target)) result.push(target);
+    if (isImage(target)) result.push(target);
   }
   // Markdown links and image embeds can both point at an image.
   for (const match of text.matchAll(/!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)]*))/g)) {
     const target = (match[1] ?? match[2]).trim().split(/\s+\(?["']/, 1)[0];
-    if (target && isImagePath(imagePath(target))) result.push(target);
+    if (target && isImage(imagePath(target))) result.push(target);
   }
   // Reference-style Markdown destinations can encode even the snapshot basename.
   for (const match of text.matchAll(/^ {0,3}\[[^\]]+\]:\s*(?:<([^>]+)>|(\S+))/gm)) {
     const target = match[1] ?? match[2];
-    if (isImagePath(imagePath(target))) result.push(target);
+    if (isImage(imagePath(target))) result.push(target);
   }
-  for (const match of text.matchAll(/<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)) {
-    if (isImagePath(imagePath(match[1]))) result.push(match[1]);
+  for (const match of text.matchAll(IMG_TAG)) {
+    if (isImage(imagePath(match[1]))) result.push(match[1]);
   }
   return result;
 }
@@ -59,7 +56,9 @@ function underMediaRoot(path: string): boolean {
   return path === MEDIA_ROOT || path.startsWith(`${MEDIA_ROOT}/`);
 }
 
-export type RegionUsage = readonly Region[] | readonly string[];
+/** What the regions use: the store's snapshot, or Region records a caller assembled. */
+export type RegionUsage = readonly Region[] | PathSnapshot;
+const isSnapshot = (usage: RegionUsage): usage is PathSnapshot => !Array.isArray(usage);
 
 export interface MediaCleanupOptions {
   signal?: AbortSignal;
@@ -161,11 +160,12 @@ class CleanupCensus {
     }
   }
 
-  protectLive(regions: RegionUsage): void {
-    if (regions !== this.regionUsage) {
-      for (const region of regions) this.protectedPaths.add(normalizePath(typeof region === 'string' ? region : region.source.path));
-      // Only immutable path snapshots may be reused; callers can mutate Region arrays.
-      this.regionUsage = Object.isFrozen(regions) && (regions.length === 0 || typeof regions[0] === 'string') ? regions : undefined;
+  protectLive(usage: RegionUsage): void {
+    if (usage !== this.regionUsage) {
+      const paths = isSnapshot(usage) ? usage.paths : usage.map(region => region.source.path);
+      for (const path of paths) this.protectedPaths.add(normalizePath(path));
+      // A snapshot is read once and reused until the store hands over a new one; a Region array is read every time.
+      this.regionUsage = isSnapshot(usage) ? usage : undefined;
     }
     for (const leaf of this.app.workspace?.getLeavesOfType?.('markdown') ?? []) {
       const view = leaf.view as { file?: TFile; editor?: { getValue(): string } };
@@ -238,4 +238,3 @@ export async function trashUnusedMedia(app: App, regions: RegionSource, approved
   } finally { census.close(); }
 }
 
-export const findUnusedMedia = scanMediaCleanup;

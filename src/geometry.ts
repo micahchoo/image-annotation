@@ -1,6 +1,6 @@
 import type { Geometry, Point } from './types';
 
-export function clamp01(value: number): number {
+function clamp01(value: number): number {
   return Math.max(0, Math.min(1, Number.isFinite(value) ? value : 0));
 }
 

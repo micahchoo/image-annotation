@@ -11,6 +11,6 @@ for(const notes of [100000])for(const snapshots of [10000])for(const fraction of
  for(let i=0;i<notes;i++){const f=file(`notes/${i}.md`,'unrelated text '.repeat(100)+(i<snapshots*fraction?` ![[${images[i].path}]]`:''));files.set(f.path,f);}
  let reads=0,bytes=0;const handlers=new Map();const app={vault:{getFiles:()=>[...files.values()],getAbstractFileByPath:p=>files.get(p),cachedRead:async f=>{reads++;bytes+=f.text.length;return f.text;},on:(name,fn)=>{handlers.set(name,fn);return name;},offref:name=>handlers.delete(name)},workspace:{getLeavesOfType:()=>[]},metadataCache:{getFirstLinkpathDest:p=>files.get(p)},fileManager:{trashFile:async f=>files.delete(f.path)}};
  let maxGap=0,last=performance.now();const timer=setInterval(()=>{const now=performance.now();maxGap=Math.max(maxGap,now-last);last=now;},1);
- const usedPaths=Object.freeze(Array.from({length:100000},(_,i)=>'used/'+i+'.png'));const start=performance.now();const result=await trashUnusedMedia(app,()=>usedPaths);const elapsed=performance.now()-start;await new Promise(r=>setTimeout(r,1));clearInterval(timer);
+ const usedPaths=Object.freeze({paths:Object.freeze(Array.from({length:100000},(_,i)=>'used/'+i+'.png'))});const start=performance.now();const result=await trashUnusedMedia(app,()=>usedPaths);const elapsed=performance.now()-start;await new Promise(r=>setTimeout(r,1));clearInterval(timer);
  console.log(JSON.stringify({notes,snapshots,usedFraction:fraction,removed:result.length,reads,bytes,elapsedMs:Math.round(elapsed),maxTimerGapMs:Math.round(maxGap)}));
 }

@@ -1,6 +1,6 @@
 import { MarkdownRenderer, type Component } from 'obsidian';
 import type { Connection, PluginHost, ReferenceSpec, Region } from './types';
-export { parseReference, referenceMarkdown } from './reference-format';
+export { LANGUAGE, parseReference, referenceMarkdown } from './reference-format';
 
 function textElement(tag: keyof HTMLElementTagNameMap, text: string, className?: string): HTMLElement {
   const element = createEl(tag);

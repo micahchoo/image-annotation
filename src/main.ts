@@ -1,12 +1,13 @@
-import { App, Component, FuzzySuggestModal, MarkdownRenderChild, MarkdownRenderer, MarkdownView, Menu, Modal, Notice, Plugin, TFile, type TAbstractFile } from 'obsidian';
+import { App, Component, FuzzySuggestModal, MarkdownRenderChild, MarkdownRenderer, Menu, Modal, Notice, Plugin, TFile, type TAbstractFile } from 'obsidian';
 import type { Connection, MediaSource, PassageTarget, PluginHost, Region, RegionEditorHandle } from './types';
-import { RegionStore } from './store';
+import { INDEX_PATH, ROOT, RegionStore } from './store';
 import { mountRegionEditor } from './region-editor';
-import { parseReference, referenceMarkdown, renderReference } from './references';
+import { LANGUAGE, parseReference, referenceMarkdown, renderReference } from './references';
 import { articleImages, ImageCandidate, isImage, prepareImage } from './media';
 import { anchorPassage } from './passage';
-import { locateReference, listReferenceOccurrences, listReferences, removeReferences } from './writing';
+import { insertAfterBlock, listReferenceOccurrences, listReferences, removeReferences, replaceReferenceMode } from './writing';
 import type { ReferenceSection } from './writing';
+import { noteText, transformNote } from './note-writer';
 import { scanMediaCleanup, trashUnusedMedia, type MediaCleanupOptions } from './media-cleanup';
 
 const message=(error:unknown)=>error instanceof Error?error.message:String(error);
@@ -62,7 +63,7 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
    // Obsidian's image handler uses the same event menu. Do not open a second menu.
    this.addImageMenuItem(Menu.forEvent(event),{value,label:element.alt||'Image',articlePath:article?.path});
   });
-  this.registerMarkdownCodeBlockProcessor('image-annotation',async(source,el,ctx)=>{
+  this.registerMarkdownCodeBlockProcessor(LANGUAGE,async(source,el,ctx)=>{
    const child=new MarkdownRenderChild(el);ctx.addChild(child);
    let active=true;let generation=0;
    child.register(()=>{active=false;this.listeners.delete(refresh);});
@@ -84,14 +85,11 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
     if(!(file instanceof TFile))return;
     const spec=parseReference(source);
     this.run(async()=>{
-     const original=await this.noteText(file);
+     const original=await noteText(this.app,file);
      const apply=async(section?:ReferenceSection|null)=>{
-      await this.transformNote(file,text=>{
+      await transformNote(this.app,file,text=>{
        if(text!==original)throw new Error('The note changed. Choose the reference again.');
-       const {start,end}=locateReference(text,spec.connectionId,section);
-       const newline=text.includes('\r\n')?'\r\n':'\n';
-       const lines=text.split(/\r?\n/);
-       lines.splice(start,end-start+1,referenceMarkdown(spec.connectionId,mode).replace(/\n/g,newline));return lines.join(newline);
+       return replaceReferenceMode(text,spec.connectionId,mode,section);
       });
       // The source processor reruns for the edited occurrence, which may be a
       // different duplicate from the one whose controls opened the picker.
@@ -109,9 +107,9 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
    this.pendingPaths.add(file.path);
    window.clearTimeout(this.refreshTimer);this.refreshTimer=window.setTimeout(()=>this.run(async()=>{
     const paths=this.pendingPaths;this.pendingPaths=new Set();
-    if(paths.has('Image Annotation/index.json'))await this.store.load();
+    if(paths.has(INDEX_PATH))await this.store.load();
     const ids=this.store.takeChanges();
-    for(const path of paths)if(path!=='Image Annotation/index.json')for(const id of this.store.connectionsForPath(path))ids.add(id);
+    for(const path of paths)if(path!==INDEX_PATH)for(const id of this.store.connectionsForPath(path))ids.add(id);
     this.changed(ids);
    }),150);
   };
@@ -119,7 +117,7 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
   this.registerEvent(this.app.vault.on('create',file=>{if(file instanceof TFile)queuePath(file);}));
   this.registerEvent(this.app.vault.on('delete',file=>this.run(async()=>{
    const ids=this.store.connectionsForPath(file.path);
-   if(file.path==='Image Annotation/index.json'||file.path==='Image Annotation')await this.store.load();
+   if(file.path===INDEX_PATH||file.path===ROOT)await this.store.load();
    this.changed(new Set([...ids,...this.store.takeChanges()]));
   })));
   this.register(()=>window.clearTimeout(this.refreshTimer));
@@ -172,23 +170,10 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
   new Picker(this.app,choices,c=>c.label,c=>c.action(),'Attach an image region').open();
  }
  attach(region:Region,target?:TargetFactory){this.track(new AttachModal(this,region,target));}
- private openNote(file:TFile):MarkdownView|undefined {
-  return this.app.workspace.getLeavesOfType('markdown').map(leaf=>leaf.view).find((view):view is MarkdownView=>view instanceof MarkdownView&&view.file?.path===file.path);
- }
- private async noteText(file:TFile):Promise<string>{return this.openNote(file)?.editor.getValue()??await this.app.vault.read(file);}
- private async transformNote(file:TFile,transform:(text:string)=>string):Promise<void>{
-  const view=this.openNote(file);
-  if(!view){await this.app.vault.process(file,transform);return;}
-  const editor=view.editor,text=editor.getValue(),next=transform(text);
-  if(text===next)return;
-  let start=0;while(start<text.length&&start<next.length&&text[start]===next[start])start++;
-  let end=text.length,nextEnd=next.length;while(end>start&&nextEnd>start&&text[end-1]===next[nextEnd-1]){end--;nextEnd--;}
-  editor.replaceRange(next.slice(start,nextEnd),editor.offsetToPos(start),editor.offsetToPos(end));
- }
  async removeNoteReferences(ids:Set<string>):Promise<void>{
   for(const file of this.app.vault.getMarkdownFiles()){
-   if(!listReferences(await this.noteText(file)).some(reference=>ids.has(reference.connectionId)))continue;
-   await this.transformNote(file,text=>removeReferences(text,ids));
+   if(!listReferences(await noteText(this.app,file)).some(reference=>ids.has(reference.connectionId)))continue;
+   await transformNote(this.app,file,text=>removeReferences(text,ids));
   }
  }
  private async cleanupProgress<T>(action:(options:MediaCleanupOptions)=>Promise<T>):Promise<T>{
@@ -198,7 +183,7 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
  }
  private async trashReviewedMedia(paths:string[],options:MediaCleanupOptions){
   let revision=0,loaded=-1;
-  const mark=(file:TAbstractFile,oldPath?:string)=>{if([file.path,oldPath].some(path=>path==='Image Annotation/index.json'||path==='Image Annotation'))revision++;};
+  const mark=(file:TAbstractFile,oldPath?:string)=>{if([file.path,oldPath].some(path=>path===INDEX_PATH||path===ROOT))revision++;};
   const events=[this.app.vault.on('create',mark),this.app.vault.on('modify',mark),this.app.vault.on('delete',mark),this.app.vault.on('rename',mark)];
   try{return await trashUnusedMedia(this.app,async()=>{
    while(loaded!==revision){options.signal?.throwIfAborted();const observed=revision;await this.store.load();this.changed();loaded=observed;}
@@ -219,11 +204,11 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
  private async reviewUnavailableReferences():Promise<void>{
   await this.store.load();this.changed();
   const files:TFile[]=[];
-  for(const file of this.app.vault.getMarkdownFiles())if(listReferences(await this.noteText(file)).some(reference=>!this.getConnection(reference.connectionId)))files.push(file);
+  for(const file of this.app.vault.getMarkdownFiles())if(listReferences(await noteText(this.app,file)).some(reference=>!this.getConnection(reference.connectionId)))files.push(file);
   if(!files.length){new Notice('No unavailable references found.');return;}
   this.track(new ReviewModal(this,'Remove unavailable references',files.map(file=>file.path),'Remove references',async()=>{
    await this.store.load();this.changed();
-   for(const file of files)await this.transformNote(file,text=>removeReferences(text,listReferences(text).filter(reference=>!this.getConnection(reference.connectionId)).map(reference=>reference.connectionId)));
+   for(const file of files)await transformNote(this.app,file,text=>removeReferences(text,listReferences(text).filter(reference=>!this.getConnection(reference.connectionId)).map(reference=>reference.connectionId)));
    new Notice('Unavailable references removed. Captions and surrounding text were kept.');
   }));
  }
@@ -232,15 +217,7 @@ export default class ImageAnnotationPlugin extends Plugin implements PluginHost 
   const caption=this.app.vault.getAbstractFileByPath(connection.captionPath);
   const fallback=caption instanceof TFile?this.app.fileManager.generateMarkdownLink(caption,file.path,undefined,'Caption and source'):'';
   const addition=`\n\n${referenceMarkdown(connection.id,mode)}\n${fallback}\n`;
-  const insert=(text:string)=>{
-   if(!connection.blockId)return text+addition;
-   const lines=text.split('\n');const index=lines.findIndex(l=>new RegExp(`\\^${connection.blockId}\\s*$`).test(l));
-   if(index<0)throw new Error('The linked paragraph moved or was removed. Caption saved; use the region browser to open it.');
-   lines.splice(index+1,0,addition);return lines.join('\n');
-  };
-  const open=this.app.workspace.getLeavesOfType('markdown').map(l=>l.view).find(v=>v instanceof MarkdownView&&v.file?.path===file.path) as MarkdownView|undefined;
-  if(open){const editor=open.editor;const text=editor.getValue();const next=insert(text);let i=0;while(i<text.length&&text[i]===next[i])i++;editor.replaceRange(next.slice(i,next.length-(text.length-i)),editor.offsetToPos(i));}
-  else await this.app.vault.process(file,insert);
+  await transformNote(this.app,file,text=>insertAfterBlock(text,connection.blockId,addition));
  }
 }
 

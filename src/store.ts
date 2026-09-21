@@ -1,10 +1,13 @@
 import type { App, TAbstractFile, TFile } from 'obsidian';
 import type {
-  Connection, Geometry, MediaSource, PassageTarget, Point, Region, RegionData,
+  Connection, Geometry, MediaSource, PassageTarget, PathSnapshot, Point, Region, RegionData,
 } from './types';
+import { ensureFolder } from './folders';
 
-const ROOT = 'Image Annotation';
-const INDEX = `${ROOT}/index.json`;
+/** The plugin's folder, and the index inside it that other plugins read. Neither name may change. */
+export const ROOT = 'Image Annotation';
+export const INDEX_PATH = `${ROOT}/index.json`;
+const INDEX = INDEX_PATH;
 const CAPTIONS = `${ROOT}/Captions`;
 const BODY_START = '<!-- image-annotation:body -->';
 const BODY_END = '<!-- image-annotation:end -->';
@@ -17,7 +20,7 @@ export class RegionStore {
   private connectionsById = new Map<string, Connection>();
   private connectionsByRegion = new Map<string, Set<string>>();
   private connectionsByPath = new Map<string, Set<string>>();
-  private imagePathsSnapshot?: readonly string[];
+  private imagePathsSnapshot?: PathSnapshot;
   private regionImages = new Map<string, Set<string>>();
   private serializedRecords = new WeakMap<object, string>();
   private pendingChanges = new Set<string>();
@@ -113,7 +116,7 @@ export class RegionStore {
       const captionText = renderCaption(this.getRegion(regionId)!, connection, caption);
       let createdCaption = false;
       try {
-        await this.ensureFolder(CAPTIONS);
+        await ensureFolder(this.app, CAPTIONS);
         await this.app.vault.create(connection.captionPath, captionText);
         createdCaption = true;
         await this.commit({ ...this.data, connections: [...this.data.connections, connection] }, this.diskIndex, { connections: [connection] });
@@ -178,7 +181,7 @@ export class RegionStore {
 
   private async commit(next: RegionData, expected: string | null, delta: Delta): Promise<void> {
     const serialized = await this.serialize(next);
-    await this.ensureFolder(ROOT);
+    await ensureFolder(this.app, ROOT);
     const file = this.app.vault.getAbstractFileByPath(INDEX);
     if (file && isFile(file) && file.extension === 'json') {
       await this.app.vault.process(file, current => {
@@ -216,9 +219,9 @@ export class RegionStore {
     return new Set(this.connectionsByPath.get(path) ?? []);
   }
 
-  /** Immutable source-path snapshot; cleanup can reuse it until regions change. */
-  imagePaths(): readonly string[] {
-    return this.imagePathsSnapshot ??= Object.freeze([...this.regionImages.keys()]);
+  /** The image paths the regions use, as one frozen snapshot until the regions change. */
+  imagePaths(): PathSnapshot {
+    return this.imagePathsSnapshot ??= Object.freeze({ paths: Object.freeze([...this.regionImages.keys()]) });
   }
 
   regionsForImage(path: string): Region[] {
@@ -369,15 +372,6 @@ export class RegionStore {
     let value: unknown;
     try { value = JSON.parse(raw); } catch { throw new Error('Image Annotation/index.json is corrupt JSON'); }
     return { data: await validateData(value), raw };
-  }
-
-  private async ensureFolder(path: string): Promise<void> {
-    const parts = path.split('/');
-    let current = '';
-    for (const part of parts) {
-      current = current ? `${current}/${part}` : part;
-      if (!this.app.vault.getAbstractFileByPath(current)) await this.app.vault.createFolder(current);
-    }
   }
 
   private newId(prefix: string): string {
